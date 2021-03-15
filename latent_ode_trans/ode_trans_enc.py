@@ -1,3 +1,4 @@
+import sys
 import os
 import argparse
 import logging
@@ -13,15 +14,18 @@ import torch.optim as optim
 import torch.nn.functional as F
 import pickle as pkl
 
+from modules import TransformerLayer
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--adjoint', type=eval, default=False)
 parser.add_argument('--visualize', type=eval, default=True)
-parser.add_argument('--niters', type=int, default=8000)
+parser.add_argument('--niters', type=int, default=20000)
 parser.add_argument('--lr', type=float, default=0.01)
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--visualize_interval', type=int, default=200)
 parser.add_argument('--train_dir', type=str, default=None)
 parser.add_argument('--latent_dim', type=int, default=2)
+parser.add_argument('--dropout', type=float, default=0.0)
 args = parser.parse_args()
 
 assert args.train_dir is not None, "argument train_dir must not be empty."
@@ -223,6 +227,7 @@ if __name__ == '__main__':
     nhidden = 20
     rnn_nhidden = 25
     obs_dim = 2
+    dropout = args.dropout
     nspiral = 1000
     start = 0.
     stop = 6 * np.pi
@@ -249,7 +254,7 @@ if __name__ == '__main__':
 
     # model
     func = LatentODEfunc(latent_dim, nhidden).to(device)
-    rec = RecognitionRNN(latent_dim, obs_dim, rnn_nhidden, nspiral).to(device)
+    rec = TransformerLayer(latent_dim * 2, obs_dim, nhidden, dropout=dropout).to(device)
     dec = Decoder(latent_dim, obs_dim, nhidden).to(device)
     params = (list(func.parameters()) + list(dec.parameters()) + list(rec.parameters()))
     optimizer = optim.Adam(params, lr=args.lr)
@@ -274,12 +279,12 @@ if __name__ == '__main__':
     try:
         for itr in range(1, args.niters + 1):
             optimizer.zero_grad()
+
+            rec.train()
+            dec.train()
             # backward in time to infer q(z_0)
-            h = rec.initHidden().to(device)
-            for t in reversed(range(samp_trajs.size(1))):
-                obs = samp_trajs[:, t, :]
-                out, h = rec.forward(obs, h)
-            qz0_mean, qz0_logvar = out[:, :latent_dim], out[:, latent_dim:]
+            out = rec.forward(samp_trajs, samp_ts)    # (bs, nsample, latent_dim*2)
+            qz0_mean, qz0_logvar = out[:, 0, :latent_dim], out[:, 0, latent_dim:]
             epsilon = torch.randn(qz0_mean.size()).to(device)
             z0 = epsilon * torch.exp(.5 * qz0_logvar) + qz0_mean
 
@@ -307,6 +312,8 @@ if __name__ == '__main__':
 
             if args.visualize and itr % args.visualize_interval == 0:
                 with torch.no_grad():
+                    rec.eval()
+                    dec.eval()
                     test_z = odeint(func, pred_z[:, -1, :], test_ts).permute(1, 0, 2)    # (bs, nsample+1, nc)
                     test_x = dec(test_z[:, 1:, :])    # (bs, nsample, nc)
 
@@ -320,19 +327,18 @@ if __name__ == '__main__':
                     pretest_rmse = fn_rmse(pretest_x, pretest_trajs).item()
 
                     train_rmse = fn_rmse(pred_x, samp_trajs_nonoise).item()
-                    train_rmse1 = fn_rmse1(pred_x, samp_trajs_nonoise).item()
+                    # train_rmse1 = fn_rmse1(pred_x, samp_trajs_nonoise).item()
                 print(
-                    'Iter: {}, running avg elbo: {:.4f}. train_rmse: {:.4f}. train_rmse1:{:4f}. test_rmse: {:.4f}. pretest_rmse: {:.4f}'
-                    .format(itr, -loss_meter.avg, train_rmse, train_rmse1, test_rmse, pretest_rmse))
+                    'Iter: {}, running avg elbo: {:.4f}. train_rmse: {:.4f}. test_rmse: {:.4f}. pretest_rmse: {:.4f}'
+                    .format(itr, -loss_meter.avg, train_rmse, test_rmse, pretest_rmse))
 
                 vis_n = 6
                 with torch.no_grad():
+                    rec.eval()
+                    dec.eval()
+                    out = rec.forward(samp_trajs, samp_ts)    # (bs, nsample, latent_dim*2)
+                    qz0_mean, qz0_logvar = out[:, 0, :latent_dim], out[:, 0, latent_dim:]
                     # sample from trajectorys' approx. posterior
-                    h = rec.initHidden().to(device)
-                    for t in reversed(range(samp_trajs.size(1))):
-                        obs = samp_trajs[:, t, :]
-                        out, h = rec.forward(obs, h)
-                    qz0_mean, qz0_logvar = out[:, :latent_dim], out[:, latent_dim:]
                     epsilon = torch.randn(qz0_mean.size()).to(device)
                     z0 = epsilon * torch.exp(.5 * qz0_logvar) + qz0_mean
 

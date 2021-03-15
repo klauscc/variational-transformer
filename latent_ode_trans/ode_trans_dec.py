@@ -13,6 +13,8 @@ import torch.optim as optim
 import torch.nn.functional as F
 import pickle as pkl
 
+from modules import TransformerLayer, create_local_attn_mask
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--adjoint', type=eval, default=False)
 parser.add_argument('--visualize', type=eval, default=True)
@@ -22,6 +24,8 @@ parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--visualize_interval', type=int, default=200)
 parser.add_argument('--train_dir', type=str, default=None)
 parser.add_argument('--latent_dim', type=int, default=2)
+parser.add_argument('--dropout', type=float, default=0.0)
+parser.add_argument('--attn_bandwidth', type=int, default=10)
 args = parser.parse_args()
 
 assert args.train_dir is not None, "argument train_dir must not be empty."
@@ -250,7 +254,8 @@ if __name__ == '__main__':
     # model
     func = LatentODEfunc(latent_dim, nhidden).to(device)
     rec = RecognitionRNN(latent_dim, obs_dim, rnn_nhidden, nspiral).to(device)
-    dec = Decoder(latent_dim, obs_dim, nhidden).to(device)
+    # dec = Decoder(latent_dim, obs_dim, nhidden).to(device)
+    dec = TransformerLayer(obs_dim, latent_dim, nhidden, dropout=args.dropout).to(device)
     params = (list(func.parameters()) + list(dec.parameters()) + list(rec.parameters()))
     optimizer = optim.Adam(params, lr=args.lr)
     loss_meter = RunningAverageMeter()
@@ -285,7 +290,8 @@ if __name__ == '__main__':
 
             # forward in time and solve ode for reconstructions
             pred_z = odeint(func, z0, samp_ts).permute(1, 0, 2)    # (bs, nsample, nc)
-            pred_x = dec(pred_z)
+            mask = create_local_attn_mask(pred_z.size()[1], args.attn_bandwidth).to(device)
+            pred_x = dec(pred_z, samp_ts, mask)
 
             # compute loss
             noise_std_ = torch.zeros(pred_x.size()).to(device) + noise_std
@@ -308,12 +314,15 @@ if __name__ == '__main__':
             if args.visualize and itr % args.visualize_interval == 0:
                 with torch.no_grad():
                     test_z = odeint(func, pred_z[:, -1, :], test_ts).permute(1, 0, 2)    # (bs, nsample+1, nc)
-                    test_x = dec(test_z[:, 1:, :])    # (bs, nsample, nc)
+                    mask = create_local_attn_mask(test_z.size()[1] - 1, args.attn_bandwidth).to(device)
+                    test_x = dec(test_z[:, 1:, :], test_ts[:-1], mask)    # (bs, nsample, nc)
 
                     pretest_z = odeint(func, z0, torch.flip(pretest_ts,
                                                             dims=[0])).permute(1, 0,
                                                                                 2)    # (bs, nsample+1, nc)
-                    pretest_x = dec(pretest_z[:, 1:, :])    # (bs, nsample, nc)
+                    mask = create_local_attn_mask(pretest_z.size()[1] - 1, args.attn_bandwidth).to(device)
+                    pretest_x = dec(pretest_z[:, 1:, :], torch.flip(pretest_ts[1:], dims=[0]),
+                                    mask)    # (bs, nsample, nc)
                     pretest_x = torch.flip(pretest_x, dims=[1])
 
                     test_rmse = fn_rmse(test_x, test_trajs).item()
@@ -339,16 +348,21 @@ if __name__ == '__main__':
                     # take first trajectory for visualization
                     z0 = z0[0:vis_n]
 
-                    ts_pos = np.linspace(0., 2. * np.pi, num=2000)
-                    ts_neg = np.linspace(-np.pi, 0., num=2000)[::-1].copy()
+                    num = 300
+                    ts_pos = np.linspace(0., 2. * np.pi, num=num)
+                    ts_neg = np.linspace(-np.pi, 0., num=num)[::-1].copy()
                     ts_pos = torch.from_numpy(ts_pos).float().to(device)
                     ts_neg = torch.from_numpy(ts_neg).float().to(device)
 
                     zs_pos = odeint(func, z0, ts_pos)
                     zs_neg = odeint(func, z0, ts_neg)
 
-                    xs_pos = dec(zs_pos)
-                    xs_neg = torch.flip(dec(zs_neg), dims=[0])
+                    zs_pos = zs_pos.permute(1, 0, 2)
+                    zs_neg = zs_neg.permute(1, 0, 2)    # (bs, nsample, nc)
+
+                    mask = create_local_attn_mask(num, args.attn_bandwidth).to(device)
+                    xs_pos = dec(zs_pos, ts_pos, mask)
+                    xs_neg = torch.flip(dec(zs_neg, ts_neg), dims=[0])
 
                 xs_pos = xs_pos.cpu().numpy()
                 xs_neg = xs_neg.cpu().numpy()
