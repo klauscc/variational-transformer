@@ -161,7 +161,7 @@ def generate_spiral2d(
 #%%
 # visualization of spiral curves
 orig_trajs, samp_trajs, samp_trajs_nonoise, inward_trajs, outward_trajs, orig_ts, samp_ts, inward_ts, outward_ts = generate_spiral2d(
-        nspiral=10, ntotal=1000,start=0, stop=6*np.pi, noise_std=.3, a=0, b=.3, irregular=True, savefig=False)
+        nspiral=1000, ntotal=1000,start=0, stop=6*np.pi, noise_std=.3, a=0, b=.3, irregular=True, savefig=False)
 plt.figure(); plt.plot(orig_trajs[0, :, 0], orig_trajs[0, : , 1], label = 'ground truth spiral'); plt.plot(samp_trajs[0, :, 0], samp_trajs[0, : , 1], 'r.', label = 'sampled data')
 plt.plot(samp_trajs_nonoise[0, :, 0], samp_trajs_nonoise[0, : , 1], 'y.', label = 'sampled data no noise');
 plt.plot(inward_trajs[0, :, 0], inward_trajs[0, : , 1], 'g.', label = 'inward data'); plt.plot(outward_trajs[0, :, 0], outward_trajs[0, : , 1], 'g.', label = 'outward data')
@@ -561,19 +561,49 @@ for path in ['/home/nel/Code/class/variational-transformer/data/20210317_1354',
         np.save('/home/nel/Code/class/variational-transformer/data/result/result_ode_transformer.npy', result)
 
 #%%
+result = np.load('/home/nel/Code/class/variational-transformer/data/result/result_ode_transformer.npy', allow_pickle=True).item()
+summary_all = {}
 for mode in ['ode', 'transformer']:        
+    summary = {'train':[], 'inward':[], 'outward':[]}
     for d in result.keys():
-        summary = {}
-        for idx, r in enumerate([rmse_train, rmse_inward, rmse_outward]):
+        for idx, r in enumerate([result[d][mode]['train'], result[d][mode]['inward'], result[d][mode]['outward']]):
             r = np.array(r)
-            ii = np.where(r[:, 1] == r[:, 1].max())
+            ii = np.where(r[:, 1] == r[:, 1].min())
+            aa = r[ii][0].copy()
             if idx == 0:
-                summary['train'] = rmse_train[ii]
+                summary['train'].append(aa)
+            if idx == 1:
+                summary['inward'].append(aa)
+            if idx == 2:
+                summary['outward'].append(aa)
+    ##print(summary)
+    #print('###')    
+    summary_all[mode] = summary.copy()
+print(summary_all)
+                
+#%%
+print(summary_all['ode']['inward'])
+print(summary_all['transformer']['inward'])
 
+#%%
+ckpt_path = os.path.join(save_path, f'ckpt_15000.pth')
+checkpoint = torch.load(ckpt_path)
+func.load_state_dict(checkpoint['func_state_dict'])
+rec.load_state_dict(checkpoint['rec_state_dict'])
+dec.load_state_dict(checkpoint['dec_state_dict'])
+optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+orig_trajs = checkpoint['orig_trajs']
+samp_trajs = checkpoint['samp_trajs']
+orig_ts = checkpoint['orig_ts']
+samp_ts = checkpoint['samp_ts']
+loss_hist = checkpoint['loss_hist']
+rmse_train = checkpoint['rmse_train']
+rmse_inward = checkpoint['rmse_inward']
+rmse_outward = checkpoint['rmse_outward']
 
 
 #%% plot the loss
-loss_hist = loss_meter.hist
+#loss_hist = loss_meter.hist
 plt.figure(); plt.plot(range(len(loss_hist)), [-i for i in loss_hist], label = 'ODEnet'); plt.xlabel('Iterations');
 plt.ylabel('ElBO'); plt.legend(); plt.show()
 
@@ -588,7 +618,7 @@ plt.legend(['train', 'inward', 'outward']);plt.show()
 #%%
 # visualization
 plt.figure(figsize=(25,20))
-a = 0
+a = 10
 i_range = [a, a+6]
 for idx in range(1, 7):
   with torch.no_grad():
@@ -640,7 +670,63 @@ for idx in range(1, 7):
 #plt.savefig(os.path.join(path, f'{itr}_iterations_{i_range}'))
 
 #%%
+import matplotlib
+matplotlib.rcParams['pdf.fonttype'] = 42
+matplotlib.rcParams['ps.fonttype'] = 42
+import matplotlib.pyplot as plt
+#%%
+a = 13
+for idx in range(1, 2):
+  with torch.no_grad():
+    if not transformer:
+        # sample from trajectorys' approx. posterior
+        h = rec.initHidden().to(device)
+        for t in reversed(range(samp_trajs.size(1))):
+            obs = samp_trajs[:, t, :]
+            out, h = rec.forward(obs, h)
+        qz0_mean, qz0_logvar = out[:, :latent_dim], out[:, latent_dim:]
+    else:
+        rec.eval()
+        dec.eval()
+        out = rec.forward(samp_trajs, samp_ts)    # (bs, nsample, latent_dim*2)
+        qz0_mean, qz0_logvar = out[:, 0, :latent_dim], out[:, 0, latent_dim:]
+    epsilon = torch.randn(qz0_mean.size()).to(device)
+    z0 = epsilon * torch.exp(.5 * qz0_logvar) + qz0_mean
+
+    # take first trajectory for visualization
+    i = idx + a
+    z0 = z0[i]
+
+    ts_pos = np.linspace(0., 4. * np.pi, num=1000)
+    ts_neg = np.linspace(-2*np.pi, 0., num=1000)[::-1].copy()
+    ts_pos = torch.from_numpy(ts_pos).float().to(device)
+    ts_neg = torch.from_numpy(ts_neg).float().to(device)
+
+    zs_pos = odeint(func, z0, ts_pos)
+    zs_neg = odeint(func, z0, ts_neg)
+
+    xs_pos = dec(zs_pos)
+    xs_neg = torch.flip(dec(zs_neg), dims=[0])
+
+  xs_pos = xs_pos.cpu().numpy()
+  xs_neg = xs_neg.cpu().numpy()
+  orig_traj = orig_trajs[i].cpu().numpy()
+  samp_traj = samp_trajs[i].cpu().numpy()
+
+  plt.figure()
+  plt.plot(orig_traj[:, 0], orig_traj[:, 1],
+          'g', label='true trajectory')
+  plt.plot(xs_pos[:, 0], xs_pos[:, 1], 'r',
+          label='learned trajectory (t>0)')
+  plt.plot(xs_neg[:, 0], xs_neg[:, 1], 'b',
+          label='learned trajectory (t<0)')
+  plt.scatter(samp_traj[:, 0], samp_traj[
+              :, 1], label='sampled data', s=3)
+  plt.legend(loc='upper right')
   
+
+figure_folder = '/home/nel/Code/class/variational-transformer/data/figure'
+plt.savefig(os.path.join(figure_folder, 'fig4_ode_irregular.pdf'))
   
   
 #%%
