@@ -142,11 +142,11 @@ class TransformerLayer(nn.Module):
         h = h + self.dropout1(h2)
         h = h.permute(1, 0, 2)    # back: (bs, nsamples, nhidden)
 
-        # h = self.norm1(h)
+        h = self.norm1(h)
 
         h2 = self.ffn(h)
         h = h + self.dropout2(h2)
-        # h = self.norm2(h)
+        h = self.norm2(h)
 
         o = self.h2o(h)
         return o    # (bs, nsamples, nc_out)
