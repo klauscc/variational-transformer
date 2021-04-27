@@ -27,7 +27,7 @@ parser.add_argument('--niters', type=int, default=2000)
 parser.add_argument('--lr', type=float, default=0.01)
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--train_dir', type=str, default=None)
-args = parser.parse_args(args=[])
+args = parser.parse_args()
 
 if args.adjoint:
     from torchdiffeq import odeint_adjoint as odeint
@@ -133,7 +133,6 @@ def generate_spiral2d(
           outward_traj = orig_traj[outward_t + t0_idx, :].copy()
           outward_trajs.append(outward_traj)
 
-
         else:
           t0_idx = npr.multinomial(1, [1. / (ntotal - 2. * nsample)] * (ntotal - int(2 * nsample)))
           t0_idx = np.argmax(t0_idx) + nsample
@@ -144,8 +143,12 @@ def generate_spiral2d(
           samp_traj += npr.randn(*samp_traj.shape) * noise_std
           samp_trajs.append(samp_traj)
 
-          inward_traj = orig_traj[t0_idx + nsample:t0_idx + 2 * nsample, :].copy()
+          inward_traj = orig_traj[t0_idx -100:t0_idx, :].copy()
           inward_trajs.append(inward_traj)
+          
+          outward_traj = orig_traj[t0_idx + 100: t0_idx + 200, :].copy()
+          outward_trajs.append(outward_traj)
+
 
     # batching for sample trajectories is good for RNN; batching for original
     # trajectories only for ease of indexing
