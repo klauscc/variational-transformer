@@ -13,6 +13,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .attention import MultiheadAttention
+
 
 class FeedForwardNetwork(nn.Module):
     """feed forward network in Transformer"""
@@ -79,7 +81,7 @@ class PositionalEncoding(nn.Module):
                             self.d_model])    # (1, 1, d_model), corresponding to (bs, nsamples, d_model)
 
 
-def create_local_attn_mask(nsamples, band_width=10):
+def create_local_attn_mask(nsamples, band_width=5):
     """create local attention mask.
 
     Args:
@@ -89,11 +91,10 @@ def create_local_attn_mask(nsamples, band_width=10):
     Returns: (nsamples, nsamples)
 
     """
-    half_band = band_width // 2
     ones = torch.ones([nsamples, nsamples], dtype=torch.float32)
-    band_up = torch.triu(ones, diagonal=half_band)
-    band_lower = torch.tril(ones, diagonal=half_band)
-    mask = band_up * band_lower
+    lower_tri = 1 - torch.triu(ones, diagonal=1)
+    band_up = torch.triu(ones, diagonal=-band_width + 1)
+    mask = band_up * lower_tri
     return mask
 
 
@@ -136,6 +137,119 @@ class TransformerLayer(nn.Module):
         # h = self.i2h(x) + self.pe(ts)    # (bs, nsamples, nhidden)
         h = self.i2h(x)    # no pe
         # h = self.i2h(x) * math.sqrt(self.nhidden) + self.pe(ts)    # multiply embedding
+
+        h = h.permute(1, 0, 2)    # to: (nsamples, bs, nhidden)
+        h2 = self.self_attn(h, h, h, attn_mask=mask)[0]
+        h = h + self.dropout1(h2)
+        h = h.permute(1, 0, 2)    # back: (bs, nsamples, nhidden)
+
+        h = self.norm1(h)
+
+        h2 = self.ffn(h)
+        h = h + self.dropout2(h2)
+        h = self.norm2(h)
+
+        o = self.h2o(h)
+        return o    # (bs, nsamples, nc_out)
+
+
+class TransformerDecoder(nn.Module):
+    """Encoder for X: (bs, nsamples, nc)
+    Output is the encoded features (bs, nsamples, nc_out) 
+
+    """
+
+    def __init__(self, nc_out, nc_in, nhidden, dropout=0.1):
+        """
+        Args:
+            nc_out (int): output feature dimensions.
+            nc_in (int): nc input.
+            nhidden (int): hidden size.
+            dropout (int): The dropout rate. Default 0.1.
+            attn_bandwidth (int): the width of the attention. Default -1 means the width is the sequence length.
+        """
+        super(TransformerDecoder, self).__init__()
+
+        self.nc_out = nc_out
+        self.nc_in = nc_in
+        self.nhidden = nhidden
+
+        self.i2h = nn.Linear(nc_in, nhidden)
+        self.pe = PositionalEncoding(nhidden, scale_factor=100)
+
+        self.self_attn = MultiheadAttention(nhidden, 1)
+        self.norm1 = nn.LayerNorm(nhidden)
+        self.dropout1 = nn.Dropout(dropout)
+        self.ffn = FeedForwardNetwork(nhidden, nhidden * 2, dropout=dropout)
+        self.norm2 = nn.LayerNorm(nhidden)
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.h2o = nn.Linear(nhidden, nc_out)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x, ts, mask=None):
+        #x: (bs, nsamples, nc_in)
+        #ts: (nsamples,)
+        # h = self.i2h(x) + self.pe(ts)    # (bs, nsamples, nhidden)
+        h = self.i2h(x)    # no pe
+        # h = self.i2h(x) * math.sqrt(self.nhidden) + self.pe(ts)    # multiply embedding
+
+        h2 = self.self_attn(h, h, h, mask)[0]
+        h = h + self.dropout1(h2)    #(bs, nsamples, nhidden)
+
+        # h = self.norm1(h)
+
+        # h2 = self.ffn(h)
+        # h = h + self.dropout2(h2)
+        # h = self.norm2(h)
+        h = self.relu(h)
+
+        o = self.h2o(h)
+        return o    # (bs, nsamples, nc_out)
+
+
+class TransformerLayerPE(nn.Module):
+    """Encoder for X: (bs, nsamples, nc)
+    Output is the encoded features (bs, nsamples, nc_out) 
+
+    """
+
+    def __init__(self, nc_out, nc_in, nhidden, dropout=0.1):
+        """
+        Args:
+            nc_out (int): output feature dimensions.
+            nc_in (int): nc input.
+            nhidden (int): hidden size.
+            dropout (int): The dropout rate. Default 0.1.
+            attn_bandwidth (int): the width of the attention. Default -1 means the width is the sequence length.
+        """
+        super(TransformerLayerPE, self).__init__()
+
+        self.nc_out = nc_out
+        self.nc_in = nc_in
+        self.nhidden = nhidden
+
+        self.embedding = nn.Embedding(200, nc_in, max_norm=True)
+        indexs = torch.unsqueeze(torch.arange(100), dim=0)    # (1, 100)
+        self.register_buffer('indexs', indexs)
+
+        self.i2h = nn.Linear(nc_in * 2, nhidden)
+
+        self.self_attn = nn.MultiheadAttention(nhidden, 1, dropout=dropout)
+        self.norm1 = nn.LayerNorm(nhidden)
+        self.dropout1 = nn.Dropout(dropout)
+        self.ffn = FeedForwardNetwork(nhidden, nhidden * 2, dropout=dropout)
+        self.norm2 = nn.LayerNorm(nhidden)
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.h2o = nn.Linear(nhidden, nc_out)
+
+    def forward(self, x, ts, mask=None):
+        #x: (bs, nsamples, nc_in)
+        #ts: (nsamples,)
+        ps = self.embedding(self.indexs).expand(x.shape)
+        x = torch.cat([x, ps], dim=-1)    # (bs, nsamples, nc_in*2)
+        h = self.i2h(x)
 
         h = h.permute(1, 0, 2)    # to: (nsamples, bs, nhidden)
         h2 = self.self_attn(h, h, h, attn_mask=mask)[0]
