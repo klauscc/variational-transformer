@@ -1,0 +1,42 @@
+/Users/deyiliu/Dropbox/UNC/G4/Spring/790/code/latent_ode-master/run_models.py
+run_models.py --niters 300 -n 1000 -l 15 --dataset hopper --latent-ode --z0-encoder rnn -r 1001
+Experiment 79322
+Epoch 0001 [Test seq (cond on sampled tp)] | Loss 44398.210938 | Likelihood -44882.957031 | KL fp 2.7423 | FP STD 0.1245|
+KL coef: 0.0
+Train loss (one batch): 50607.43359375
+Train CE loss (one batch): 0.0
+Test MSE: 0.0898
+Poisson likelihood: 0.0
+CE loss: 0.0
+Experiment 79322
+Epoch 0002 [Test seq (cond on sampled tp)] | Loss 29947.705078 | Likelihood -30035.078125 | KL fp 3.7355 | FP STD 0.0625|
+KL coef: 0.0
+Train loss (one batch): 31496.38671875
+Train CE loss (one batch): 0.0
+Test MSE: 0.0601
+Poisson likelihood: 0.0
+CE loss: 0.0
+Experiment 79322
+Epoch 0003 [Test seq (cond on sampled tp)] | Loss 27881.337891 | Likelihood -27953.382812 | KL fp 3.9243 | FP STD 0.0419|
+KL coef: 0.0
+Train loss (one batch): 29106.921875
+Train CE loss (one batch): 0.0
+Test MSE: 0.0559
+Poisson likelihood: 0.0
+CE loss: 0.0
+Experiment 79322
+Epoch 0004 [Test seq (cond on sampled tp)] | Loss 27643.851562 | Likelihood -27786.099609 | KL fp 3.5958 | FP STD 0.0576|
+KL coef: 0.0
+Train loss (one batch): 28806.27734375
+Train CE loss (one batch): 0.0
+Test MSE: 0.0556
+Poisson likelihood: 0.0
+CE loss: 0.0
+Experiment 79322
+Epoch 0005 [Test seq (cond on sampled tp)] | Loss 27414.800781 | Likelihood -27460.400391 | KL fp 3.7790 | FP STD 0.0461|
+KL coef: 0.0
+Train loss (one batch): 28501.755859375
+Train CE loss (one batch): 0.0
+Test MSE: 0.0549
+Poisson likelihood: 0.0
+CE loss: 0.0
